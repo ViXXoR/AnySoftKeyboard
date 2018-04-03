@@ -93,6 +93,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 import io.reactivex.Observable;
 
@@ -107,6 +108,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
     private static final long MAX_TIME_TO_EXPECT_SELECTION_UPDATE = 1500;
     private static final int UNDO_COMMIT_NONE = -1;
     private static final int UNDO_COMMIT_WAITING_TO_RECORD_POSITION = -2;
+
     //a year ago.
     private static final long NEVER_TIME_STAMP = (-1L) * (365L * 24L * 60L * 60L * 1000L);
     private final KeyboardUIStateHandler mKeyboardHandler = new KeyboardUIStateHandler(this);
@@ -161,6 +163,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
     private long mLastSpaceTimeStamp = NEVER_TIME_STAMP;
     private View mFullScreenExtractView;
     private EditText mFullScreenExtractTextView;
+    private boolean mFrenchSpacePunctuationBehavior;
 
     public AnySoftKeyboard() {
         super();
@@ -399,7 +402,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
             return;
         }
 
-        getInputView().dismissPopupKeyboard();
+        getInputView().resetInputView();
         getInputView().setKeyboardActionType(attribute.imeOptions);
 
         mPredictionOn = false;
@@ -509,7 +512,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
         mKeyboardHandler.sendEmptyMessageDelayed(KeyboardUIStateHandler.MSG_CLOSE_DICTIONARIES, CLOSE_DICTIONARIES_DELAY);
 
         final InputViewBinder inputView = getInputView();
-        if (inputView != null) inputView.closing();
+        if (inputView != null) inputView.resetInputView();
     }
 
     /*
@@ -679,16 +682,8 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
 
                 TextEntryState.typedCharacter(c, false);
             }
-            ic.deleteSurroundingText(toLeft.length(), toRight.length());
-            ic.setComposingText(word, 1);
-            // repositioning the cursor
-            if (toRight.length() > 0) {
-                final int cursorPosition = getCursorPosition(ic) - toRight.length();
-                Logger.d(TAG, "Repositioning the cursor inside the word to position %d", cursorPosition);
-                ic.setSelection(cursorPosition, cursorPosition);
-            }
+            ic.setComposingRegion(mGlobalCursorPosition - toLeft.length(), mGlobalCursorPosition + toRight.length());
 
-            mWord.setCursorPosition(toLeft.length());
             ic.endBatchEdit();
             postUpdateSuggestions();
         } else {
@@ -816,12 +811,6 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
             mCandidateView.setSuggestions(suggestions,
                     typedWordValid, haveMinimalSuggestion && isAutoCorrect());
         }
-    }
-
-    @Override
-    public void pickLastSuggestion() {
-        if (mCandidateView.getSuggestions().size() > 0)
-            pickSuggestionManually(0, mCandidateView.getSuggestions().get(0));
     }
 
     @Override
@@ -959,16 +948,14 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
 
         switch (primaryCode) {
             case KeyCodes.DELETE:
-                if (ic == null)// if we don't want to do anything, lets check null first.
-                {
-                    break;
-                }
-                // we do backword if the shift is pressed while pressing
-                // backspace (like in a PC)
-                if (mUseBackWord && mShiftKeyState.isPressed() && !mShiftKeyState.isLocked()) {
-                    handleBackWord(ic);
-                } else {
-                    handleDeleteLastCharacter(false);
+                if (ic != null) {
+                    // we do backword if the shift is pressed while pressing
+                    // backspace (like in a PC)
+                    if (mUseBackWord && mShiftKeyState.isPressed() && !mShiftKeyState.isLocked()) {
+                        handleBackWord(ic);
+                    } else {
+                        handleDeleteLastCharacter(false);
+                    }
                 }
                 break;
             case KeyCodes.SHIFT:
@@ -985,12 +972,9 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
                 handleShift();
                 break;
             case KeyCodes.DELETE_WORD:
-                if (ic == null)// if we don't want to do anything, lets check
-                // null first.
-                {
-                    break;
+                if (ic != null) {
+                    handleBackWord(ic);
                 }
-                handleBackWord(ic);
                 break;
             case KeyCodes.CLEAR_INPUT:
                 if (ic != null) {
@@ -1092,11 +1076,9 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
                 }
                 break;
             case KeyCodes.CANCEL:
-                mCancelKeyPressed = true;
-                if(mUtilityKeyboardShown) {
-                    mUtilityKeyboardShown = false;
+                if (!handleCloseRequest()) {
+                    hideWindow();
                 }
-                hideWindow();
                 break;
             case KeyCodes.SETTINGS:
                 showOptionsMenu();
@@ -1127,8 +1109,10 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
                 }
                 break;
             case KeyCodes.UTILITY_KEYBOARD:
-                mUtilityKeyboardShown = true;
-                getInputView().openUtilityKeyboard();
+                final InputViewBinder inputViewForUtilityKeyboardRequest = getInputView();
+                if (inputViewForUtilityKeyboardRequest instanceof AnyKeyboardView) {
+                    ((AnyKeyboardView) inputViewForUtilityKeyboardRequest).openUtilityKeyboard();
+                }
                 break;
             case KeyCodes.MODE_ALPHABET_POPUP:
                 showLanguageSelectionDialog();
@@ -1245,10 +1229,6 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
     public void onKey(int primaryCode, Key key, int multiTapIndex, int[] nearByKeyCodes, boolean fromUI) {
         super.onKey(primaryCode, key, multiTapIndex, nearByKeyCodes, fromUI);
 
-        if (TextEntryState.getState() == TextEntryState.State.PERFORMED_GESTURE) {
-            pickLastSuggestion();
-        }
-
         if (primaryCode > 0) {
             onNonFunctionKey(primaryCode, key, multiTapIndex, nearByKeyCodes, fromUI);
         } else {
@@ -1323,6 +1303,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
         super.onAlphabetKeyboardSet(keyboard);
         setKeyboardForView(keyboard);
         setKeyboardFinalStuff();
+        mFrenchSpacePunctuationBehavior = mSwapPunctuationAndSpace && keyboard.getLocale().toString().toLowerCase(Locale.US).startsWith("fr");
     }
 
     @Override
@@ -1430,12 +1411,12 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
             //sp#ace -> ace
             //cursor == 2
             //length == 5
-            //textLeft = word.substring(2, 3) -> word.substring(cursor, length - cursor)
-            final CharSequence textLeft = mWord.getTypedWord().subSequence(mWord.cursorPosition(), mWord.length());
+            //textAfterCursor = word.substring(2, 3) -> word.substring(cursor, length - cursor)
+            final CharSequence textAfterCursor = mWord.getTypedWord().subSequence(mWord.cursorPosition(), mWord.length());
             mWord.reset();
             mSuggest.resetNextWordSentence();
             TextEntryState.newSession(mPredictionOn);
-            ic.setComposingText(textLeft, 0);
+            ic.setComposingText(textAfterCursor, 0);
             postUpdateSuggestions();
             return;
         }
@@ -1564,21 +1545,21 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
 
     private void toggleCaseOfSelectedCharacters() {
         InputConnection ic = getCurrentInputConnection();
-        if(ic == null) return;
+        if (ic == null) return;
 
         ExtractedText et = ic.getExtractedText(EXTRACTED_TEXT_REQUEST, 0);
-        if(et == null) return;
+        if (et == null) return;
         int selectionStart = et.selectionStart;
         int selectionEnd = et.selectionEnd;
 
-        if(et.text == null) return;
+        if (et.text == null) return;
         CharSequence selectedText = et.text.subSequence(selectionStart, selectionEnd);
-        if(selectedText == null) return;
+        if (selectedText == null) return;
 
-        if(selectedText.length() > 0) {
+        if (selectedText.length() > 0) {
             ic.beginBatchEdit();
             String selectedTextString = selectedText.toString();
-            if(selectedTextString.compareTo(selectedTextString.toUpperCase(getCurrentAlphabetKeyboard().getLocale())) == 0) {
+            if (selectedTextString.compareTo(selectedTextString.toUpperCase(getCurrentAlphabetKeyboard().getLocale())) == 0) {
                 // Convert to lower case
                 ic.setComposingText(selectedTextString.toLowerCase(getCurrentAlphabetKeyboard().getLocale()), 0);
             } else {
@@ -1707,7 +1688,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
             pickDefaultSuggestion(isAutoCorrect() && !newLine);
             // Picked the suggestion by a space/punctuation character: we will treat it
             // as "added an auto space".
-            mJustAddedAutoSpace = !newLine;
+            mJustAddedAutoSpace = mAutoSpace && !newLine;
         } else if (separatorInsideWord) {
             // when putting a separator in the middle of a word, there is no
             // need to do correction, or keep knowledge
@@ -1732,7 +1713,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
                 }
             } else if (mJustAddedAutoSpace && mLastSpaceTimeStamp != NEVER_TIME_STAMP/*meaning last key was SPACE*/ &&
                     (mSwapPunctuationAndSpace || newLine) &&
-                    isSentenceSeparator(primaryCode)) {
+                    isSpaceSwapCharacter(primaryCode)) {
                 //current text in the input-box should be something like "word "
                 //the user pressed a punctuation (say ","). So we want to change the text in the input-box
                 //into "word "->"word, "
@@ -1761,19 +1742,30 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
         }
     }
 
-    @Override
-    protected boolean handleCloseRequest() {
-        TextEntryState.restartSession();
-
-        if (!super.handleCloseRequest()) {
-            if (getInputView() != null && getInputView().closing()) {
-                //we return FALSE here, since we are not handling the closing
-                //internally
-                return false;
+    private boolean isSpaceSwapCharacter(int primaryCode) {
+        if (isSentenceSeparator(primaryCode)) {
+            if (mFrenchSpacePunctuationBehavior) {
+                switch (primaryCode) {
+                    case '!':
+                    case '?':
+                    case ':':
+                    case ';':
+                        return false;
+                    default:
+                        return true;
+                }
+            } else {
+                return true;
             }
+        } else {
+            return false;
         }
 
-        return true;
+    }
+
+    @Override
+    protected boolean handleCloseRequest() {
+        return super.handleCloseRequest() || (getInputView() != null && getInputView().resetInputView());
     }
 
     @Override
@@ -1875,9 +1867,13 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
         return false;
     }
 
-    @Override
     public void pickSuggestionManually(int index, CharSequence suggestion) {
-        super.pickSuggestionManually(index, suggestion);
+        pickSuggestionManually(index, suggestion, mAutoSpace);
+    }
+
+    @Override
+    public void pickSuggestionManually(int index, CharSequence suggestion, boolean withAutoSpaceEnabled) {
+        super.pickSuggestionManually(index, suggestion, withAutoSpaceEnabled);
         final String typedWord = mWord.getTypedWord().toString();
 
         if (mWord.isAtTagsSearchState()) {
@@ -1915,7 +1911,7 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
 
             TextEntryState.acceptedSuggestion(mWord.getTypedWord(), suggestion);
             // Follow it with a space
-            if (mAutoSpace && (index == 0 || !mWord.isAtTagsSearchState())) {
+            if (withAutoSpaceEnabled && (index == 0 || !mWord.isAtTagsSearchState())) {
                 sendKeyChar((char) KeyCodes.SPACE);
                 mJustAddedAutoSpace = true;
                 setSpaceTimeStamp(true);
@@ -1999,12 +1995,10 @@ public abstract class AnySoftKeyboard extends AnySoftKeyboardWithGestureTyping {
             //note: typedWord may be empty
             final InputConnection ic = getCurrentInputConnection();
             mUndoCommitCursorPosition = UNDO_COMMIT_NONE;
-            ic.beginBatchEdit();
-            ic.deleteSurroundingText(length, 0);
+            ic.setComposingRegion(mGlobalCursorPosition - length, mGlobalCursorPosition);
             final CharSequence typedWord = mWord.getTypedWord();
             ic.setComposingText(typedWord/* mComposing */, 1);
             TextEntryState.backspace();
-            ic.endBatchEdit();
             performUpdateSuggestions();
             if (mJustAutoAddedWord) {
                 removeFromUserDictionary(typedWord.toString());
